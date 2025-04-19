@@ -40,10 +40,15 @@ private:
     std::unique_ptr<juce::TextButton> loopButton;
     std::unique_ptr<juce::TextButton> holdButton;
     std::unique_ptr<juce::TextButton> stopButton;
+    std::unique_ptr<juce::TextButton> modeButton;
     std::unique_ptr<juce::Slider> speedSlider;
     CustomLookAndFeel customLookAndFeel;
     
     std::unique_ptr<juce::FileChooser> fileChooser;
+    
+    // Resizing components
+    std::unique_ptr<juce::ResizableCornerComponent> resizeCorner;
+    std::unique_ptr<juce::ComponentBoundsConstrainer> constrainer;
 
     void loadFile(const juce::File& file);
     void updateThumbnail();
@@ -53,6 +58,7 @@ private:
     void loopButtonClicked();
     void updateLoopButtonText();
     void updateHoldButtonText();
+    void updateModeButtonText();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SondyQ2AudioProcessorEditor)
 };

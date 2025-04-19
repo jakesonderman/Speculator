@@ -142,7 +142,9 @@ public:
         
         // Draw text
         g.setColour(button.findColour(juce::ToggleButton::textColourId));
-        g.setFont(juce::Font("Monaco", 12.0f, juce::Font::plain));
+        juce::FontOptions options;
+        options = options.withHeight(12.0f).withStyle("plain");
+        g.setFont(juce::Font(options));
         g.drawText(button.getButtonText(),
                   checkboxBounds.getRight() + 5.0f, bounds.getY(),
                   bounds.getWidth() - checkboxBounds.getWidth() - 5.0f, bounds.getHeight(),

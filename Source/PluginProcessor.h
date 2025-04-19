@@ -52,6 +52,11 @@ public:
 
     SamplePlayer* getSamplePlayer() { return samplePlayer.get(); }
 
+    // New methods for playback mode
+    void setPlaybackMode(SamplePlayer::PlaybackMode mode);
+    SamplePlayer::PlaybackMode getPlaybackMode() const;
+    void cyclePlaybackMode();  // Cycles through the available modes
+
 private:
     std::unique_ptr<SamplePlayer> samplePlayer;
 

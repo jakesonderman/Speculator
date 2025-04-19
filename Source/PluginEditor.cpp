@@ -4,6 +4,16 @@
 SondyQ2AudioProcessorEditor::SondyQ2AudioProcessorEditor(SondyQ2AudioProcessor& p)
     : AudioProcessorEditor(&p), audioProcessor(p)
 {
+    // Set up resizing behavior
+    constrainer = std::make_unique<juce::ComponentBoundsConstrainer>();
+    constrainer->setMinimumWidth(400);
+    constrainer->setMinimumHeight(300);
+    constrainer->setMaximumWidth(1200);
+    constrainer->setMaximumHeight(800);
+    
+    resizeCorner = std::make_unique<juce::ResizableCornerComponent>(this, constrainer.get());
+    addAndMakeVisible(resizeCorner.get());
+    
     // Apply custom look and feel
     setLookAndFeel(&customLookAndFeel);
     
@@ -26,6 +36,10 @@ SondyQ2AudioProcessorEditor::SondyQ2AudioProcessorEditor(SondyQ2AudioProcessor& 
     stopButton->addListener(this);
     addAndMakeVisible(stopButton.get());
     
+    modeButton = std::make_unique<juce::TextButton>("Mode: Poly");
+    modeButton->addListener(this);
+    addAndMakeVisible(modeButton.get());
+    
     speedSlider = std::make_unique<juce::Slider>(juce::Slider::SliderStyle::LinearHorizontal, 
                                                juce::Slider::TextEntryBoxPosition::TextBoxRight);
     speedSlider->setRange(0.1, 4.0, 0.01);
@@ -36,11 +50,21 @@ SondyQ2AudioProcessorEditor::SondyQ2AudioProcessorEditor(SondyQ2AudioProcessor& 
     
     // Set up waveform display
     waveformDisplay = std::make_unique<WaveformDisplay>();
+    waveformDisplay->onPositionClicked = [this](double position) {
+        if (auto* samplePlayer = audioProcessor.getSamplePlayer())
+        {
+            if (samplePlayer->getHoldMode())
+            {
+                samplePlayer->setHoldPosition(position);
+            }
+        }
+    };
     addAndMakeVisible(waveformDisplay.get());
     
     // Start timer to refresh UI
     startTimerHz(30);
     
+    // Set initial size
     setSize(600, 400);
 }
 
@@ -70,32 +94,51 @@ void SondyQ2AudioProcessorEditor::resized()
 {
     auto area = getLocalBounds().reduced(10);
     
-    // Set up waveform display
-    waveformDisplay->setBounds(area.removeFromTop(200));
+    // Position resize corner
+    const int cornerSize = 20;
+    resizeCorner->setBounds(getWidth() - cornerSize, getHeight() - cornerSize, cornerSize, cornerSize);
+    
+    // Calculate proportional heights
+    const float waveformHeightRatio = 0.5f;  // 50% of total height for waveform
+    const float buttonHeight = 30;  // Fixed height for buttons
+    const float spacing = 10;       // Fixed spacing
+    
+    // Set up waveform display with proportional height
+    int waveformHeight = static_cast<int>(area.getHeight() * waveformHeightRatio);
+    waveformDisplay->setBounds(area.removeFromTop(waveformHeight));
     
     // Leave some space between waveform and controls
-    area.removeFromTop(10);
+    area.removeFromTop(spacing);
     
     // Create a horizontal area for buttons
-    auto buttonArea = area.removeFromTop(40);
+    auto buttonArea = area.removeFromTop(buttonHeight);
     
-    // Layout controls
-    loadButton->setBounds(buttonArea.removeFromLeft(100));
+    // Calculate button widths based on available space
+    int availableWidth = buttonArea.getWidth();
+    int buttonSpacing = spacing;
+    int numButtons = 5;  // loadButton, loopButton, holdButton, stopButton, modeButton
+    int buttonWidth = (availableWidth - (buttonSpacing * (numButtons - 1))) / numButtons;
     
-    buttonArea.removeFromLeft(10); // Space between buttons
-    loopButton->setBounds(buttonArea.removeFromLeft(100));
+    // Layout controls with proportional widths
+    loadButton->setBounds(buttonArea.removeFromLeft(buttonWidth));
+    buttonArea.removeFromLeft(buttonSpacing);
     
-    buttonArea.removeFromLeft(10); // Space between buttons
-    holdButton->setBounds(buttonArea.removeFromLeft(100));
+    loopButton->setBounds(buttonArea.removeFromLeft(buttonWidth));
+    buttonArea.removeFromLeft(buttonSpacing);
     
-    buttonArea.removeFromLeft(10); // Space between buttons
-    stopButton->setBounds(buttonArea.removeFromLeft(100));
+    holdButton->setBounds(buttonArea.removeFromLeft(buttonWidth));
+    buttonArea.removeFromLeft(buttonSpacing);
+    
+    stopButton->setBounds(buttonArea.removeFromLeft(buttonWidth));
+    buttonArea.removeFromLeft(buttonSpacing);
+    
+    modeButton->setBounds(buttonArea.removeFromLeft(buttonWidth));
     
     // Leave space for slider
-    area.removeFromTop(10);
+    area.removeFromTop(spacing);
     
-    // Speed slider
-    speedSlider->setBounds(area.removeFromTop(40));
+    // Speed slider with proportional height
+    speedSlider->setBounds(area.removeFromTop(buttonHeight));
 }
 
 void SondyQ2AudioProcessorEditor::buttonClicked(juce::Button* button)
@@ -115,6 +158,13 @@ void SondyQ2AudioProcessorEditor::buttonClicked(juce::Button* button)
         bool shouldHold = holdButton->getToggleState();
         audioProcessor.setHoldMode(shouldHold);
         updateHoldButtonText();
+        
+        // Update the hold position immediately when enabling hold mode
+        if (shouldHold && audioProcessor.getSamplePlayer() != nullptr)
+        {
+            double currentPos = audioProcessor.getSamplePlayer()->getCurrentPosition();
+            audioProcessor.getSamplePlayer()->setHoldPosition(currentPos);
+        }
     }
     else if (button == stopButton.get())
     {
@@ -122,6 +172,11 @@ void SondyQ2AudioProcessorEditor::buttonClicked(juce::Button* button)
         {
             samplePlayer->stopAllVoices();
         }
+    }
+    else if (button == modeButton.get())
+    {
+        audioProcessor.cyclePlaybackMode();
+        updateModeButtonText();
     }
 }
 
@@ -208,6 +263,27 @@ void SondyQ2AudioProcessorEditor::updateHoldButtonText()
 {
     bool isHoldMode = holdButton->getToggleState();
     holdButton->setButtonText(isHoldMode ? "Hold: ON" : "Hold: OFF");
+}
+
+void SondyQ2AudioProcessorEditor::updateModeButtonText()
+{
+    if (auto* samplePlayer = audioProcessor.getSamplePlayer())
+    {
+        juce::String modeText = "Mode: ";
+        switch (samplePlayer->getPlaybackMode())
+        {
+            case SamplePlayer::PlaybackMode::Polyphonic:
+                modeText += "Poly";
+                break;
+            case SamplePlayer::PlaybackMode::Monophonic:
+                modeText += "Mono";
+                break;
+            case SamplePlayer::PlaybackMode::OneShot:
+                modeText += "OneShot";
+                break;
+        }
+        modeButton->setButtonText(modeText);
+    }
 }
 
 void SondyQ2AudioProcessorEditor::updatePlayheadPosition(double position)

@@ -35,13 +35,11 @@ SamplePlayer::SamplePlayer() : isEnabled(true), currentLevel(0.0f)
 {
     formatManager.registerBasicFormats();
     
-    // Initialize all voices with slightly different parameters
-    // to prevent phase alignment issues
-    for (size_t i = 0; i < voices.size(); ++i) {
-        auto& voice = voices[i];
-        voice.grainDuration = 0.1 + (i * 0.001); // Slightly vary grain durations
-        voice.grainOverlap = 0.5 + (i * 0.01);   // Slightly vary overlaps
-        voice.lastOutputSample = 0.0f;           // Track last output for anti-clicking
+    // Initialize voices with slightly different parameters to prevent phase alignment
+    for (auto& voice : voices)
+    {
+        voice.grainDuration = 0.1f;
+        voice.grainOverlap = 0.5f;
     }
 }
 
@@ -59,28 +57,31 @@ void SamplePlayer::loadFile(const juce::File& file)
         fileBuffer.setSize(reader->numChannels, reader->lengthInSamples);
         reader->read(&fileBuffer, 0, reader->lengthInSamples, 0, true, true);
         
-        // Store the file's sample rate and update the ratio
         fileSampleRate = reader->sampleRate;
         sampleRateRatio = currentSampleRate / fileSampleRate;
         
-        // Normalize the buffer to prevent clipping
+        // Normalize and apply DC blocking
         float maxSample = 0.0f;
+        DSPUtils::DCBlocker dcBlocker;
+        
         for (int channel = 0; channel < fileBuffer.getNumChannels(); ++channel)
         {
-            const float* channelData = fileBuffer.getReadPointer(channel);
+            float* channelData = fileBuffer.getWritePointer(channel);
+            
+            // First pass: find max sample and apply DC blocking
             for (int i = 0; i < fileBuffer.getNumSamples(); ++i)
             {
+                channelData[i] = dcBlocker.process(channelData[i]);
                 maxSample = std::max(maxSample, std::abs(channelData[i]));
             }
         }
         
         if (maxSample > 0.0f)
         {
-            float scale = 0.95f / maxSample; // Leave some headroom
+            float scale = 0.95f / maxSample;
             fileBuffer.applyGain(scale);
         }
         
-        // Apply a short fade-in/fade-out to the buffer to prevent clicks
         applyFades();
     }
 }
@@ -112,18 +113,17 @@ void SamplePlayer::applyFades()
 void SamplePlayer::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
     currentSampleRate = sampleRate;
+    sampleRateRatio = currentSampleRate / fileSampleRate;
     
-    // Pre-allocate memory for temporary processing
     tempBuffer.setSize(2, samplesPerBlock);
+    
+    // Initialize all DSP components
+    outputLimiter.prepare(sampleRate);
     
     for (auto& voice : voices)
     {
-        voice.envelope.sampleRate = static_cast<float>(sampleRate);
+        voice.prepare(sampleRate);
         voice.envelope.setParameters(0.01f, 0.1f, 0.7f, 0.2f, static_cast<float>(sampleRate));
-        
-        // Initialize anti-aliasing filter
-        voice.filter.initialize(sampleRate);
-        voice.filter.setCutoff(20000.0f); // Start with high cutoff
     }
 }
 
@@ -144,132 +144,89 @@ void SamplePlayer::processBlock(juce::AudioBuffer<float>& buffer, int startSampl
     if (!fileBuffer.getNumSamples() || !isEnabled)
         return;
         
-    // Clear the output in the target range
     buffer.clear(startSample, numSamples);
-    
-    // Clear temporary buffer
     tempBuffer.clear();
     
     float maxLevel = 0.0f;
     
+    // Process each voice
     for (auto& voice : voices)
     {
         if (!voice.isActive)
             continue;
             
-        // Process grains
         for (int sample = 0; sample < numSamples; ++sample)
         {
             float sampleValue = 0.0f;
             
-            // Process existing grains
+            // Process grains
             for (auto& grain : voice.grains)
             {
                 if (!grain.isActive)
                     continue;
                     
-                // Calculate window position (0 to 1)
-                float windowPos = grain.age / (voice.grainDuration * currentSampleRate);
+                // Calculate window position and gain
+                grain.phase = static_cast<float>(grain.age / grain.grainLength);
+                float windowGain = DSPUtils::GrainWindow::getGainAt(grain.phase, voice.grainOverlap);
                 
-                // Apply enhanced window function (combination of Hanning and edge smoothing)
-                float window = 0.5f * (1.0f - std::cos(2.0f * M_PI * windowPos));
+                // Get interpolated sample with improved resampling
+                float interpolatedSample = voice.resampler.resample(
+                    fileBuffer.getReadPointer(0),
+                    grain.currentPosition,
+                    fileBuffer.getNumSamples()
+                );
                 
-                // Smooth start and end conditions (more gradual fade)
-                if (windowPos < 0.15f)
-                    window *= (windowPos / 0.15f) * (windowPos / 0.15f); // Quadratic fade-in
-                else if (windowPos > 0.85f)
-                    window *= ((1.0f - windowPos) / 0.15f) * ((1.0f - windowPos) / 0.15f); // Quadratic fade-out
+                // Apply phase alignment
+                float phaseAlignedSample = interpolatedSample * 
+                    std::cos(grain.initialPhase + grain.phaseIncrement * grain.age);
                 
-                // Get the sample using cubic interpolation with improved boundary checks
-                double pos = grain.currentPosition;
-                int pos0 = static_cast<int>(pos);
-                
-                // Ensure all positions are within valid range
-                int numSamples = fileBuffer.getNumSamples();
-                
-                // Safe modulo operation
-                pos0 = ((pos0 % numSamples) + numSamples) % numSamples;
-                int pos1 = (pos0 + 1) % numSamples;
-                int pos2 = (pos0 + 2) % numSamples;
-                int pos3 = (pos0 + 3) % numSamples;
-                
-                float t = static_cast<float>(pos - std::floor(pos));
-                float t2 = t * t;
-                float t3 = t2 * t;
-                
-                float c0 = -0.5f * t3 + t2 - 0.5f * t;
-                float c1 = 1.5f * t3 - 2.5f * t2 + 1.0f;
-                float c2 = -1.5f * t3 + 2.0f * t2 + 0.5f * t;
-                float c3 = 0.5f * t3 - 0.5f * t2;
-                
-                float y0 = fileBuffer.getSample(0, pos0);
-                float y1 = fileBuffer.getSample(0, pos1);
-                float y2 = fileBuffer.getSample(0, pos2);
-                float y3 = fileBuffer.getSample(0, pos3);
-                
-                float interpolatedSample = c0 * y0 + c1 * y1 + c2 * y2 + c3 * y3;
-                
-                // Apply anti-aliasing when pitch shifting up
-                if (voice.pitchRatio > 1.0) {
-                    // Adjust filter cutoff based on pitch ratio
-                    float cutoff = std::min(20000.0f, static_cast<float>(20000.0 / voice.pitchRatio));
-                    voice.filter.setCutoff(cutoff);
-                    interpolatedSample = voice.filter.process(interpolatedSample);
-                }
-                
-                sampleValue += interpolatedSample * window;
+                sampleValue += phaseAlignedSample * windowGain;
                 
                 // Update grain position and age
                 grain.currentPosition += voice.pitchRatio * playbackSpeed;
                 grain.age++;
                 
-                if (grain.age >= voice.grainDuration * currentSampleRate)
+                if (grain.age >= grain.grainLength)
                     grain.isActive = false;
             }
+            
+            // Apply voice processing chain
+            if (voice.pitchRatio > 1.0) {
+                float cutoff = std::min(20000.0f, static_cast<float>(20000.0 / voice.pitchRatio));
+                voice.antiAliasFilter.setCutoff(cutoff);
+                sampleValue = voice.antiAliasFilter.process(sampleValue);
+            }
+            
+            sampleValue = voice.dcBlocker.process(sampleValue);
+            sampleValue = voice.softClipper.process(sampleValue);
             
             // Apply envelope
             float envelopeGain = voice.envelope.process();
             sampleValue *= envelopeGain * voice.velocity;
             
-            // Apply soft clipping to prevent harsh distortion
-            sampleValue = softClip(sampleValue);
-            
-            // Anti-click treatment - smooth out any large jumps in amplitude
-            sampleValue = antiClick(sampleValue, voice.lastOutputSample);
-            voice.lastOutputSample = sampleValue;
-            
-            // Add to temp buffer for this voice
+            // Add to temp buffer
             for (int channel = 0; channel < tempBuffer.getNumChannels(); ++channel)
                 tempBuffer.addSample(channel, sample, sampleValue);
             
-            // Track maximum level
             maxLevel = std::max(maxLevel, std::abs(sampleValue));
             
-            // Update grains for next sample
+            // Update grains
             updateGrains(voice);
-            
-            // Check if voice is finished
-            if (voice.envelope.state == Voice::Envelope::State::Idle)
-                voice.isActive = false;
         }
     }
     
-    // Apply soft limiting to the mixed signal to avoid clipping
-    for (int channel = 0; channel < tempBuffer.getNumChannels(); ++channel) {
-        float* channelData = tempBuffer.getWritePointer(channel);
+    // Final output processing
+    for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+    {
+        float* outBuffer = buffer.getWritePointer(channel, startSample);
+        const float* tempData = tempBuffer.getReadPointer(channel);
         
-        for (int i = 0; i < numSamples; ++i) {
-            // Apply soft clipping to the final output
-            channelData[i] = softClip(channelData[i]);
+        for (int sample = 0; sample < numSamples; ++sample)
+        {
+            outBuffer[sample] = outputLimiter.process(tempData[sample]);
         }
     }
     
-    // Copy from temp buffer to main buffer
-    for (int channel = 0; channel < std::min(buffer.getNumChannels(), tempBuffer.getNumChannels()); ++channel) {
-        buffer.addFrom(channel, startSample, tempBuffer, channel, 0, numSamples);
-    }
-    
-    // Update current level
     currentLevel.store(maxLevel);
 }
 
@@ -281,172 +238,327 @@ void SamplePlayer::handleMidiMessage(const juce::MidiMessage& message)
 
     if (message.isNoteOn())
     {
-        startVoice(message.getNoteNumber(), message.getFloatVelocity());
+        switch (playbackMode)
+        {
+            case PlaybackMode::Polyphonic:
+                startVoice(message.getNoteNumber(), message.getFloatVelocity());
+                break;
+                
+            case PlaybackMode::Monophonic:
+                // Stop any existing voices before starting new one
+                stopAllVoices();
+                startVoice(message.getNoteNumber(), message.getFloatVelocity());
+                break;
+                
+            case PlaybackMode::OneShot:
+                // Start a new voice without stopping others
+                startVoice(message.getNoteNumber(), message.getFloatVelocity());
+                break;
+        }
     }
     else if (message.isNoteOff())
     {
-        stopVoice(message.getNoteNumber());
+        // In Polyphonic mode, stop the specific note
+        // In Monophonic and OneShot modes, notes continue playing
+        if (playbackMode == PlaybackMode::Polyphonic)
+        {
+            stopVoice(message.getNoteNumber());
+        }
     }
 }
 
 void SamplePlayer::startVoice(int midiNoteNumber, float velocity)
 {
-    // Find a free voice or steal the oldest one
-    Voice* voice = nullptr;
-    for (auto& v : voices)
+    // Find free voice or steal one if needed
+    int voiceIndex = findFreeVoice();
+    if (voiceIndex == -1)
     {
-        if (!v.isActive || v.envelope.state == Voice::Envelope::State::Idle)
+        // In OneShot mode, we need to be more careful about voice stealing
+        if (playbackMode == PlaybackMode::OneShot)
         {
-            voice = &v;
-            break;
-        }
-    }
-    
-    if (!voice)
-    {
-        // Find the voice with the longest release time
-        voice = &voices[0];
-        float longestTime = 0.0f;
-        for (auto& v : voices)
-        {
-            if (v.envelope.currentTime > longestTime)
+            // Try to find a voice that's finished its envelope
+            for (size_t i = 0; i < voices.size(); ++i)
             {
-                longestTime = v.envelope.currentTime;
-                voice = &v;
+                if (voices[i].envelope.state == Voice::Envelope::State::Idle)
+                {
+                    voiceIndex = static_cast<int>(i);
+                    break;
+                }
             }
+        }
+        
+        // If still no voice found, steal one
+        if (voiceIndex == -1)
+        {
+            stealVoice();
+            voiceIndex = findFreeVoice();
         }
     }
     
-    if (voice)
+    if (voiceIndex != -1)
     {
-        // If we're replacing a voice that's still making sound, 
-        // crossfade to prevent clicks
-        bool wasActive = voice->isActive && voice->envelope.currentLevel > 0.01f;
+        auto& voice = voices[voiceIndex];
+        voice.reset();
         
-        // Reset the voice
-        voice->isActive = true;
-        voice->midiNote = midiNoteNumber;
-        // Slightly randomize velocity to prevent phase alignment
-        voice->velocity = velocity * (0.98f + 0.04f * (rand() / (float)RAND_MAX));
-        voice->position = 0.0;
+        voice.isActive = true;
+        voice.midiNote = midiNoteNumber;
+        voice.velocity = velocity;
+        voice.position = isHoldMode ? holdPosition : 0.0;
         
-        // Calculate pitch ratio with more precision
-        voice->pitchRatio = std::pow(2.0, (midiNoteNumber - 60) / 12.0);
+        // Calculate pitch ratio from MIDI note
+        const float noteRatio = std::pow(2.0f, (midiNoteNumber - 60) / 12.0f);
+        voice.pitchRatio = noteRatio;
         
-        // Apply slight detuning for thicker sound
-        double detune = 1.0 + (rand() / (RAND_MAX * 500.0)); // +/- 0.2% detune
-        voice->pitchRatio *= detune;
-        
-        // Clear existing grains if not preserving them for crossfade
-        if (!wasActive) {
-            voice->grains.clear();
-        } else {
-            // Mark existing grains for fade-out
-            for (auto& grain : voice->grains) {
-                grain.isFadingOut = true;
-            }
+        // In OneShot and Monophonic modes, we don't use the envelope release
+        if (playbackMode == PlaybackMode::OneShot || playbackMode == PlaybackMode::Monophonic)
+        {
+            voice.envelope.sustainLevel = 1.0f;  // Full sustain
+            voice.envelope.releaseTime = 0.5f;   // Longer release for smoother stop
         }
         
-        // Reset filter state
-        voice->filter.reset();
-        
-        voice->envelope.noteOn();
+        voice.envelope.noteOn();
     }
 }
 
 void SamplePlayer::stopVoice(int midiNoteNumber)
 {
-    for (auto& voice : voices)
+    // Only stop voices in Polyphonic mode
+    if (playbackMode == PlaybackMode::Polyphonic)
     {
-        if (voice.isActive && voice.midiNote == midiNoteNumber)
+        for (auto& voice : voices)
         {
-            voice.envelope.noteOff();
+            if (voice.isActive && voice.midiNote == midiNoteNumber)
+            {
+                voice.envelope.noteOff();
+            }
         }
     }
 }
 
 void SamplePlayer::updateGrains(Voice& voice)
 {
-    // Remove completely inactive grains
+    // Remove inactive grains
     voice.grains.erase(
         std::remove_if(voice.grains.begin(), voice.grains.end(),
-                      [](const Grain& g) { return !g.isActive; }),
-        voice.grains.end());
+            [](const Grain& g) { return !g.isActive; }),
+        voice.grains.end()
+    );
     
-    // Create new grain if needed
-    bool shouldCreateNewGrain = voice.grains.empty() ||
-        (voice.grains.back().age >= voice.grainDuration * currentSampleRate * (1.0 - voice.grainOverlap));
-    
-    if (shouldCreateNewGrain && voice.grains.size() < voice.maxGrains)
+    // Create new grains as needed
+    if (voice.grains.empty() || 
+        voice.grains.back().phase >= voice.grainOverlap)
     {
         Grain newGrain;
-        newGrain.isActive = true;
+        newGrain.startPosition = voice.position;
         newGrain.currentPosition = voice.position;
-        newGrain.age = 0;
-        newGrain.isFadingOut = false;
+        newGrain.grainLength = voice.grainDuration * currentSampleRate;
+        newGrain.isActive = true;
+        
+        // Calculate initial phase and phase increment for alignment
+        newGrain.initialPhase = static_cast<float>(std::fmod(voice.position, 2.0 * M_PI));
+        newGrain.phaseIncrement = static_cast<float>(2.0 * M_PI * voice.pitchRatio / newGrain.grainLength);
+        
         voice.grains.push_back(newGrain);
     }
     
-    // Update voice position with improved looping logic
-    voice.position += voice.pitchRatio * playbackSpeed;
-    if (voice.position >= fileBuffer.getNumSamples())
+    // Update voice position
+    if (!isHoldMode)
     {
-        if (isLooping) {
-            // Implement smoother loop with crossfade
-            double overshoot = voice.position - fileBuffer.getNumSamples();
-            voice.position = overshoot;
-            
-            // Add a grain at the start for seamless loop
-            if (voice.grains.size() < voice.maxGrains) {
-                Grain loopGrain;
-                loopGrain.isActive = true;
-                loopGrain.currentPosition = voice.position;
-                loopGrain.age = 0;
-                loopGrain.isFadingOut = false;
-                voice.grains.push_back(loopGrain);
-            }
-        } else if (isHoldMode) {
-            // Hold mode - stay at the end of the sample
-            voice.position = fileBuffer.getNumSamples() - 1;
-        } else {
-            // Normal mode - deactivate the voice when it reaches the end
-            voice.isActive = false;
-            voice.envelope.noteOff();
-            
-            // Clear all grains to stop playback completely
-            voice.grains.clear();
+        voice.position += voice.pitchRatio * playbackSpeed;
+        
+        // Handle looping
+        if (isLooping && voice.position >= fileBuffer.getNumSamples())
+        {
+            voice.position = 0.0;
+        }
+        else if (!isLooping && voice.position >= fileBuffer.getNumSamples())
+        {
+            stopVoice(voice.midiNote);
         }
     }
 }
 
-// One-pole low-pass filter implementation
-void SamplePlayer::OnePoleFilter::initialize(double sampleRate) {
-    this->sampleRate = sampleRate;
-    setCutoff(20000.0f);
-    lastOutput = 0.0f;
+int SamplePlayer::findFreeVoice() const
+{
+    for (size_t i = 0; i < voices.size(); ++i)
+    {
+        if (!voices[i].isActive)
+            return static_cast<int>(i);
+    }
+    return -1;
 }
 
-void SamplePlayer::OnePoleFilter::setCutoff(float cutoffFreq) {
-    // Clamp cutoff frequency to reasonable range
-    cutoffFreq = std::max(20.0f, std::min(20000.0f, cutoffFreq));
+void SamplePlayer::stealVoice()
+{
+    // Find the voice with the lowest volume
+    int stealIndex = 0;
+    float lowestLevel = std::numeric_limits<float>::max();
     
-    // Calculate filter coefficient
-    float x = std::exp(-2.0f * M_PI * cutoffFreq / static_cast<float>(sampleRate));
-    a = x;
+    for (size_t i = 0; i < voices.size(); ++i)
+    {
+        if (voices[i].envelope.currentLevel < lowestLevel)
+        {
+            lowestLevel = voices[i].envelope.currentLevel;
+            stealIndex = static_cast<int>(i);
+        }
+    }
+    
+    voices[stealIndex].reset();
 }
 
-float SamplePlayer::OnePoleFilter::process(float input) {
-    lastOutput = input * (1.0f - a) + lastOutput * a;
-    return lastOutput;
+void SamplePlayer::setHoldMode(bool shouldHold)
+{
+    isHoldMode = shouldHold;
+    if (shouldHold)
+    {
+        for (const auto& voice : voices)
+        {
+            if (voice.isActive)
+            {
+                holdPosition = voice.position;
+                break;
+            }
+        }
+    }
 }
 
-void SamplePlayer::OnePoleFilter::reset() {
-    lastOutput = 0.0f;
+void SamplePlayer::setHoldPosition(double normalizedPosition)
+{
+    if (fileBuffer.getNumSamples() > 0)
+    {
+        holdPosition = normalizedPosition * fileBuffer.getNumSamples();
+        if (isHoldMode)
+        {
+            for (auto& voice : voices)
+            {
+                if (voice.isActive)
+                {
+                    voice.position = holdPosition;
+                }
+            }
+        }
+    }
+}
+
+double SamplePlayer::getHoldPosition() const
+{
+    return fileBuffer.getNumSamples() > 0 ? 
+        holdPosition / fileBuffer.getNumSamples() : 0.0;
+}
+
+double SamplePlayer::getCurrentPosition() const
+{
+    for (const auto& voice : voices)
+    {
+        if (voice.isActive)
+        {
+            return voice.position / 
+                (fileBuffer.getNumSamples() > 0 ? fileBuffer.getNumSamples() : 1);
+        }
+    }
+    return 0.0;
+}
+
+void SamplePlayer::stopAllVoices()
+{
+    for (auto& voice : voices)
+    {
+        if (voice.isActive)
+        {
+            // Use a quick release for immediate stop
+            voice.envelope.releaseTime = 0.02f;
+            voice.envelope.noteOff();
+            voice.grains.clear();
+            voice.reset();
+        }
+    }
+    
+    // Process one block to ensure release
+    juce::AudioBuffer<float> tempBuffer(2, 512);
+    tempBuffer.clear();
+    processBlock(tempBuffer, 0, tempBuffer.getNumSamples());
+}
+
+void SamplePlayer::Voice::Envelope::setParameters(float attack, float decay, float sustain, float release, float sr)
+{
+    attackTime = attack;
+    decayTime = decay;
+    sustainLevel = sustain;
+    releaseTime = release;
+    sampleRate = sr;
+}
+
+float SamplePlayer::Voice::Envelope::process()
+{
+    float targetLevel = 0.0f;
+    float timeInc = 1.0f / sampleRate;
+    
+    switch (state)
+    {
+        case State::Attack:
+            currentTime += timeInc;
+            currentLevel = currentTime / attackTime;
+            if (currentLevel >= 1.0f)
+            {
+                currentLevel = 1.0f;
+                state = State::Decay;
+                currentTime = 0.0f;
+            }
+            break;
+            
+        case State::Decay:
+            currentTime += timeInc;
+            currentLevel = 1.0f - (1.0f - sustainLevel) * (currentTime / decayTime);
+            if (currentLevel <= sustainLevel)
+            {
+                currentLevel = sustainLevel;
+                state = State::Sustain;
+            }
+            break;
+            
+        case State::Sustain:
+            currentLevel = sustainLevel;
+            break;
+            
+        case State::Release:
+            currentTime += timeInc;
+            currentLevel = sustainLevel * (1.0f - currentTime / releaseTime);
+            if (currentLevel <= 0.001f)
+            {
+                currentLevel = 0.0f;
+                state = State::Idle;
+            }
+            break;
+            
+        case State::Idle:
+            currentLevel = 0.0f;
+            break;
+    }
+    
+    return currentLevel;
+}
+
+void SamplePlayer::Voice::Envelope::noteOn()
+{
+    state = State::Attack;
+    currentTime = 0.0f;
+    if (state == State::Release)
+    {
+        currentTime = (currentLevel / 1.0f) * attackTime;
+    }
+}
+
+void SamplePlayer::Voice::Envelope::noteOff()
+{
+    if (state != State::Idle)
+    {
+        state = State::Release;
+        currentTime = 0.0f;
+    }
 }
 
 void SamplePlayer::setPlaybackSpeed(float speed)
 {
-    // Smooth transitions in playback speed
     playbackSpeed = speed;
 }
 

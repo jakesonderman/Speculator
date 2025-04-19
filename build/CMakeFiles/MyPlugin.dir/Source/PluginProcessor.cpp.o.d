@@ -1356,6 +1356,7 @@ CMakeFiles/MyPlugin.dir/Source/PluginProcessor.cpp.o: \
   /Users/sondy/Desktop/Sondy_V3/Coding/Plugin/SondyQ2/JUCE/modules/juce_audio_utils/audio_cd/juce_AudioCDBurner.h \
   /Users/sondy/Desktop/Sondy_V3/Coding/Plugin/SondyQ2/JUCE/modules/juce_audio_utils/audio_cd/juce_AudioCDReader.h \
   /Users/sondy/Desktop/Sondy_V3/Coding/Plugin/SondyQ2/Source/SamplePlayer.h \
+  /Users/sondy/Desktop/Sondy_V3/Coding/Plugin/SondyQ2/Source/DSPUtils.h \
   /Users/sondy/Desktop/Sondy_V3/Coding/Plugin/SondyQ2/Source/PluginEditor.h \
   /Users/sondy/Desktop/Sondy_V3/Coding/Plugin/SondyQ2/Source/CustomLookAndFeel.h \
   /Users/sondy/Desktop/Sondy_V3/Coding/Plugin/SondyQ2/Source/WaveformDisplay.h

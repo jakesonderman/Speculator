@@ -1026,4 +1026,5 @@ CMakeFiles/MyPlugin.dir/Source/SamplePlayer.cpp.o: \
   /Users/sondy/Desktop/Sondy_V3/Coding/Plugin/SondyQ2/JUCE/modules/juce_audio_formats/codecs/juce_OggVorbisAudioFormat.h \
   /Users/sondy/Desktop/Sondy_V3/Coding/Plugin/SondyQ2/JUCE/modules/juce_audio_formats/codecs/juce_WavAudioFormat.h \
   /Users/sondy/Desktop/Sondy_V3/Coding/Plugin/SondyQ2/JUCE/modules/juce_audio_formats/codecs/juce_WindowsMediaAudioFormat.h \
-  /Users/sondy/Desktop/Sondy_V3/Coding/Plugin/SondyQ2/JUCE/modules/juce_audio_formats/sampler/juce_Sampler.h
+  /Users/sondy/Desktop/Sondy_V3/Coding/Plugin/SondyQ2/JUCE/modules/juce_audio_formats/sampler/juce_Sampler.h \
+  /Users/sondy/Desktop/Sondy_V3/Coding/Plugin/SondyQ2/Source/DSPUtils.h

@@ -166,6 +166,39 @@ void SondyQ2AudioProcessor::setHoldMode(bool shouldHold)
         samplePlayer->setHoldMode(shouldHold);
 }
 
+void SondyQ2AudioProcessor::setPlaybackMode(SamplePlayer::PlaybackMode mode)
+{
+    if (samplePlayer)
+        samplePlayer->setPlaybackMode(mode);
+}
+
+SamplePlayer::PlaybackMode SondyQ2AudioProcessor::getPlaybackMode() const
+{
+    return samplePlayer ? samplePlayer->getPlaybackMode() : SamplePlayer::PlaybackMode::Polyphonic;
+}
+
+void SondyQ2AudioProcessor::cyclePlaybackMode()
+{
+    if (!samplePlayer)
+        return;
+        
+    auto currentMode = samplePlayer->getPlaybackMode();
+    
+    // Cycle through modes: Polyphonic -> Monophonic -> OneShot -> Polyphonic
+    switch (currentMode)
+    {
+        case SamplePlayer::PlaybackMode::Polyphonic:
+            samplePlayer->setPlaybackMode(SamplePlayer::PlaybackMode::Monophonic);
+            break;
+        case SamplePlayer::PlaybackMode::Monophonic:
+            samplePlayer->setPlaybackMode(SamplePlayer::PlaybackMode::OneShot);
+            break;
+        case SamplePlayer::PlaybackMode::OneShot:
+            samplePlayer->setPlaybackMode(SamplePlayer::PlaybackMode::Polyphonic);
+            break;
+    }
+}
+
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
     return new SondyQ2AudioProcessor();
