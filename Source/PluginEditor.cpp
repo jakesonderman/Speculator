@@ -48,6 +48,15 @@ SondyQ2AudioProcessorEditor::SondyQ2AudioProcessorEditor(SondyQ2AudioProcessor& 
     speedSlider->addListener(this);
     addAndMakeVisible(speedSlider.get());
     
+    // Initialize grain size slider
+    grainSizeSlider = std::make_unique<juce::Slider>(juce::Slider::SliderStyle::LinearHorizontal,
+                                                   juce::Slider::TextEntryBoxPosition::TextBoxRight);
+    grainSizeSlider->setRange(0.05, 0.5, 0.01);
+    grainSizeSlider->setValue(0.1);
+    grainSizeSlider->setTextValueSuffix(" s");
+    grainSizeSlider->addListener(this);
+    addAndMakeVisible(grainSizeSlider.get());
+    
     // Set up waveform display
     waveformDisplay = std::make_unique<WaveformDisplay>();
     waveformDisplay->onPositionClicked = [this](double position) {
@@ -134,11 +143,17 @@ void SondyQ2AudioProcessorEditor::resized()
     
     modeButton->setBounds(buttonArea.removeFromLeft(buttonWidth));
     
-    // Leave space for slider
+    // Leave space for sliders
     area.removeFromTop(spacing);
     
-    // Speed slider with proportional height
+    // Speed slider
     speedSlider->setBounds(area.removeFromTop(buttonHeight));
+    
+    // Leave space between sliders
+    area.removeFromTop(spacing);
+    
+    // Grain size slider
+    grainSizeSlider->setBounds(area.removeFromTop(buttonHeight));
 }
 
 void SondyQ2AudioProcessorEditor::buttonClicked(juce::Button* button)
@@ -186,6 +201,11 @@ void SondyQ2AudioProcessorEditor::sliderValueChanged(juce::Slider* slider)
     {
         float speed = static_cast<float>(speedSlider->getValue());
         audioProcessor.setPlaybackSpeed(speed);
+    }
+    else if (slider == grainSizeSlider.get())
+    {
+        float grainSize = static_cast<float>(grainSizeSlider->getValue());
+        audioProcessor.setGrainSize(grainSize);
     }
 }
 

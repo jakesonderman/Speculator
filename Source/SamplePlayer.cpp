@@ -570,4 +570,16 @@ void SamplePlayer::setLooping(bool shouldLoop)
 double SamplePlayer::getLengthInSeconds() const
 {
     return fileBuffer.getNumSamples() > 0 ? fileBuffer.getNumSamples() / fileSampleRate : 0.0;
+}
+
+void SamplePlayer::setGrainDuration(float durationInSeconds)
+{
+    // Clamp the duration between reasonable values (50ms to 500ms)
+    defaultGrainDuration = std::max(0.05f, std::min(0.5f, durationInSeconds));
+    
+    // Update all voices with the new grain duration
+    for (auto& voice : voices)
+    {
+        voice.grainDuration = defaultGrainDuration;
+    }
 } 

@@ -199,6 +199,17 @@ void SondyQ2AudioProcessor::cyclePlaybackMode()
     }
 }
 
+void SondyQ2AudioProcessor::setGrainSize(float sizeInSeconds)
+{
+    if (samplePlayer)
+        samplePlayer->setGrainDuration(sizeInSeconds);
+}
+
+float SondyQ2AudioProcessor::getGrainSize() const
+{
+    return samplePlayer ? samplePlayer->getGrainDuration() : 0.1f;
+}
+
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
     return new SondyQ2AudioProcessor();

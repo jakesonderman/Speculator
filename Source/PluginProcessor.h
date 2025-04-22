@@ -49,6 +49,8 @@ public:
     void setPlaybackSpeed(float speed);
     void setLooping(bool shouldLoop);
     void setHoldMode(bool shouldHold);
+    void setGrainSize(float sizeInSeconds);
+    float getGrainSize() const;
 
     SamplePlayer* getSamplePlayer() { return samplePlayer.get(); }
 

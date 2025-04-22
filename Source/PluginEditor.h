@@ -42,6 +42,7 @@ private:
     std::unique_ptr<juce::TextButton> stopButton;
     std::unique_ptr<juce::TextButton> modeButton;
     std::unique_ptr<juce::Slider> speedSlider;
+    std::unique_ptr<juce::Slider> grainSizeSlider;
     CustomLookAndFeel customLookAndFeel;
     
     std::unique_ptr<juce::FileChooser> fileChooser;

@@ -38,6 +38,10 @@ public:
     bool getEnabled() const { return isEnabled; }
     void stopAllVoices();
 
+    // Grain control
+    void setGrainDuration(float durationInSeconds);
+    float getGrainDuration() const { return defaultGrainDuration; }
+
     // Replace trigger mode with playback mode
     void setPlaybackMode(PlaybackMode mode) { playbackMode = mode; }
     PlaybackMode getPlaybackMode() const { return playbackMode; }
@@ -137,6 +141,8 @@ private:
     
     // Output processing
     DSPUtils::PeakLimiter outputLimiter;
+    
+    float defaultGrainDuration = 0.1f;  // Default grain duration in seconds
     
     void startVoice(int midiNoteNumber, float velocity);
     void stopVoice(int midiNoteNumber);
